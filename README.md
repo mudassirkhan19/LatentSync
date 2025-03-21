@@ -120,7 +120,7 @@ There are two ways to perform inference, and both require **6.8 GB** of VRAM.
 Run the Gradio app for inference:
 
 ```bash
-python gradio_app.py
+uv run pythongradio_app.py
 ```
 
 ### 2. Command Line Interface

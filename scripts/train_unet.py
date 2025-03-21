@@ -12,47 +12,43 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import os
-import math
 import argparse
-import shutil
 import datetime
 import logging
-from omegaconf import OmegaConf
-
-from tqdm.auto import tqdm
-from einops import rearrange
-
-import torch
-import torch.nn.functional as F
-import torch.nn as nn
-import torch.distributed as dist
-from torch.utils.data.distributed import DistributedSampler
-from torch.nn.parallel import DistributedDataParallel as DDP
+import math
+import os
+import shutil
 
 import diffusers
-from diffusers import AutoencoderKL, DDIMScheduler
-from diffusers.utils.logging import get_logger
-from diffusers.optimization import get_scheduler
+import lpips
+import torch
+import torch.distributed as dist
+import torch.nn.functional as F
 from accelerate.utils import set_seed
+from diffusers import AutoencoderKL, DDIMScheduler
+from diffusers.optimization import get_scheduler
+from diffusers.utils.logging import get_logger
+from einops import rearrange
+from omegaconf import OmegaConf
+from torch.nn.parallel import DistributedDataParallel as DDP
+from torch.utils.data.distributed import DistributedSampler
+from tqdm.auto import tqdm
 
-from latentsync.data.unet_dataset import UNetDataset
-from latentsync.models.unet import UNet3DConditionModel
-from latentsync.models.stable_syncnet import StableSyncNet
-from latentsync.pipelines.lipsync_pipeline import LipsyncPipeline
-from latentsync.utils.util import (
-    init_dist,
-    cosine_loss,
-    one_step_sampling,
-)
-from latentsync.utils.util import plot_loss_chart
-from latentsync.whisper.audio2feature import Audio2Feature
-from latentsync.trepa.loss import TREPALoss
+from eval.eval_sync_conf import syncnet_eval
 from eval.syncnet import SyncNetEval
 from eval.syncnet_detect import SyncNetDetector
-from eval.eval_sync_conf import syncnet_eval
-import lpips
-
+from latentsync.data.unet_dataset import UNetDataset
+from latentsync.models.stable_syncnet import StableSyncNet
+from latentsync.models.unet import UNet3DConditionModel
+from latentsync.pipelines.lipsync_pipeline import LipsyncPipeline
+from latentsync.trepa.loss import TREPALoss
+from latentsync.utils.util import (
+    cosine_loss,
+    init_dist,
+    one_step_sampling,
+    plot_loss_chart,
+)
+from latentsync.whisper.audio2feature import Audio2Feature
 
 logger = get_logger(__name__)
 
@@ -68,7 +64,7 @@ def main(config):
     set_seed(seed)
 
     # Logging folder
-    folder_name = "train" + datetime.datetime.now().strftime(f"-%Y_%m_%d-%H:%M:%S")
+    folder_name = "train" + datetime.datetime.now().strftime("-%Y_%m_%d-%H:%M:%S")
     output_dir = os.path.join(config.data.train_output_dir, folder_name)
 
     # Make one log on every process with the configuration for debugging.
@@ -136,9 +132,7 @@ def main(config):
         syncnet = StableSyncNet(OmegaConf.to_container(syncnet_config.model), gradient_checkpointing=True).to(
             device=device, dtype=torch.float16
         )
-        syncnet_checkpoint = torch.load(
-            syncnet_config.ckpt.inference_ckpt_path, map_location=device, weights_only=True
-        )
+        syncnet_checkpoint = torch.load(syncnet_config.ckpt.inference_ckpt_path, map_location=device, weights_only=True)
         syncnet.load_state_dict(syncnet_checkpoint["state_dict"])
         syncnet.requires_grad_(False)
 
@@ -219,7 +213,6 @@ def main(config):
         scheduler=noise_scheduler,
     ).to(device)
     pipeline.set_progress_bar_config(disable=True)
-
     # DDP warpper
     denoising_unet = DDP(denoising_unet, device_ids=[local_rank], output_device=local_rank)
 
@@ -282,6 +275,7 @@ def main(config):
                     continue
                 audio_embeds = torch.stack(audio_embeds_list)  # (B, 16, 50, 384)
                 audio_embeds = audio_embeds.to(device, dtype=torch.float16)
+                # torch.Size([1, 16, 50, 384])
             else:
                 audio_embeds = None
 
@@ -295,12 +289,13 @@ def main(config):
             masked_pixel_values = rearrange(masked_pixel_values, "b f c h w -> (b f) c h w")
             masks = rearrange(masks, "b f c h w -> (b f) c h w")
             ref_pixel_values = rearrange(ref_pixel_values, "b f c h w -> (b f) c h w")
-
             with torch.no_grad():
                 gt_latents = vae.encode(gt_pixel_values).latent_dist.sample()
                 masked_latents = vae.encode(masked_pixel_values).latent_dist.sample()
                 ref_latents = vae.encode(ref_pixel_values).latent_dist.sample()
+                # torch.Size([16, 4, 32, 32])
 
+            # torch.Size([16, 1, 256, 256]) -> torch.Size([16, 4, 32, 32])
             masks = torch.nn.functional.interpolate(masks, size=config.data.resolution // vae_scale_factor)
 
             gt_latents = (
@@ -325,6 +320,7 @@ def main(config):
                 noise_ind_std_dev = (1 / (1 + config.run.mixed_noise_alpha**2)) ** 0.5
                 noise_ind = torch.randn_like(gt_latents) * noise_ind_std_dev
                 noise = noise_ind + noise_shared
+                # torch.Size([1, 4, 16, 32, 32])
             else:
                 noise = torch.randn_like(gt_latents)
                 noise = noise[:, :, 0:1].repeat(
@@ -348,9 +344,7 @@ def main(config):
                 raise NotImplementedError
             else:
                 raise ValueError(f"Unknown prediction type {noise_scheduler.config.prediction_type}")
-
             denoising_unet_input = torch.cat([noisy_gt_latents, masks, masked_latents, ref_latents], dim=1)
-
             # Predict the noise and compute loss
             # Mixed-precision training
             with torch.autocast(device_type="cuda", dtype=torch.float16, enabled=config.run.mixed_precision_training):
@@ -382,18 +376,14 @@ def main(config):
                 trepa_pred_pixel_values = rearrange(
                     pred_pixel_values, "(b f) c h w -> b c f h w", f=config.data.num_frames
                 )
-                trepa_gt_pixel_values = rearrange(
-                    gt_pixel_values, "(b f) c h w -> b c f h w", f=config.data.num_frames
-                )
+                trepa_gt_pixel_values = rearrange(gt_pixel_values, "(b f) c h w -> b c f h w", f=config.data.num_frames)
                 trepa_loss = trepa_loss_func(trepa_pred_pixel_values, trepa_gt_pixel_values)
             else:
                 trepa_loss = 0
 
             if config.model.add_audio_layer and config.run.use_syncnet:
                 if config.run.pixel_space_supervise:
-                    syncnet_input = rearrange(
-                        pred_pixel_values, "(b f) c h w -> b (f c) h w", f=config.data.num_frames
-                    )
+                    syncnet_input = rearrange(pred_pixel_values, "(b f) c h w -> b (f c) h w", f=config.data.num_frames)
                 else:
                     syncnet_input = rearrange(pred_latents, "b c f h w -> b (f c) h w")
 
@@ -459,7 +449,7 @@ def main(config):
                 logger.info("Running validation... ")
 
                 validation_video_out_path = os.path.join(output_dir, f"val_videos/val_video_{global_step}.mp4")
-                validation_video_mask_path = os.path.join(output_dir, f"val_videos/val_video_mask.mp4")
+                validation_video_mask_path = os.path.join(output_dir, "val_videos/val_video_mask.mp4")
 
                 with torch.autocast(device_type="cuda", dtype=torch.float16):
                     pipeline(

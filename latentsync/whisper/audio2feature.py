@@ -1,9 +1,11 @@
 # Adapted from https://github.com/TMElyralab/MuseTalk/blob/main/musetalk/whisper/audio2feature.py
 
-from .whisper import load_model
+import os
+
 import numpy as np
 import torch
-import os
+
+from latentsync.whisper.whisper import load_model
 
 
 class Audio2Feature:
@@ -36,14 +38,12 @@ class Audio2Feature:
         center_idx = int(vid_idx * 50 / fps)
         left_idx = center_idx - self.audio_feat_length[0] * 2
         right_idx = center_idx + (self.audio_feat_length[1] + 1) * 2
-
         for idx in range(left_idx, right_idx):
             idx = max(0, idx)
             idx = min(length - 1, idx)
             x = feature_array[idx]
             selected_feature.append(x)
             selected_idx.append(idx)
-
         selected_feature = torch.cat(selected_feature, dim=0)
         selected_feature = selected_feature.reshape(-1, self.embedding_dim)  # 50*384
         return selected_feature, selected_idx

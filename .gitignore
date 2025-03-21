@@ -15,6 +15,7 @@
 __pycache__/
 
 # folders
+.venv/
 wandb/
 *debug*
 /debug

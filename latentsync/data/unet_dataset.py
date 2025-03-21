@@ -12,17 +12,17 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import os
 import math
-import numpy as np
-from torch.utils.data import Dataset
-import torch
+import os
 import random
-import cv2
-from ..utils.image_processor import ImageProcessor, load_fixed_mask
-from ..utils.audio import melspectrogram
+
+import numpy as np
+import torch
 from decord import AudioReader, VideoReader, cpu
-import torch.nn.functional as F
+from torch.utils.data import Dataset
+
+from latentsync.utils.audio import melspectrogram
+from latentsync.utils.image_processor import ImageProcessor, load_fixed_mask
 
 
 class UNetDataset(Dataset):
@@ -154,5 +154,45 @@ class UNetDataset(Dataset):
             video_path=video_path,
             start_idx=start_idx,
         )
-
+        # torch.Size([16, 3, 256, 256]),
+        # torch.Size([16, 3, 256, 256]),
+        # torch.Size([16, 3, 256, 256]),
+        # [],
+        # torch.Size([16, 1, 256, 256]),
+        # "/data/ls_data/iv_recording/high_visual_quality/C1035_shot_001_010.mp4"
+        # 79
         return sample
+
+
+if __name__ == "__main__":
+    import torchvision
+    from omegaconf import OmegaConf
+
+    config = OmegaConf.load("configs/unet/stage2.yaml")
+    dataset = UNetDataset(train_data_dir="/data/ls_data/iv_recording/high_visual_quality/", config=config)
+    dataset.worker_init_fn(0)
+    sample = dataset[0]
+    gt_pixel_values = sample["gt_pixel_values"]
+    masked_pixel_values = sample["masked_pixel_values"]
+    ref_pixel_values = sample["ref_pixel_values"]
+    mel = sample["mel"]
+    masks = sample["masks"]
+    video_path = sample["video_path"]
+    start_idx = sample["start_idx"]
+    # x1 = torchvision.transforms.ToPILImage()(torchvision.utils.make_grid(reference_clip, nrow=5))
+    # x1.save("temp/references.png")
+    # save all images to temp and respective folders
+    os.makedirs("temp", exist_ok=True)
+    x1 = torchvision.utils.make_grid(gt_pixel_values, nrow=4)
+    x1 = torchvision.transforms.ToPILImage()(x1)
+    x1.save("temp/gt_pixel_values.png")
+    x2 = torchvision.utils.make_grid(masked_pixel_values, nrow=4)
+    x2 = torchvision.transforms.ToPILImage()(x2)
+    x2.save("temp/masked_pixel_values.png")
+    x3 = torchvision.utils.make_grid(ref_pixel_values, nrow=4)
+    x3 = torchvision.transforms.ToPILImage()(x3)
+    x3.save("temp/ref_pixel_values.png")
+    x4 = torchvision.utils.make_grid(masks, nrow=4)
+    x4 = torchvision.transforms.ToPILImage()(x4)
+    x4.save("temp/masks.png")
+    breakpoint()

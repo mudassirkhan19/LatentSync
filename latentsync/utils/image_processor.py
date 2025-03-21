@@ -12,15 +12,18 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from torchvision import transforms
-import cv2
-from einops import rearrange
-import mediapipe as mp
-import torch
-import numpy as np
 from typing import Union
-from .affine_transform import AlignRestore, laplacianSmooth
+
+import cv2
 import face_alignment
+import mediapipe as mp
+import numpy as np
+import torch
+from einops import rearrange
+from PIL import Image
+from torchvision import transforms
+
+from latentsync.utils.affine_transform import AlignRestore, laplacianSmooth
 
 """
 If you are enlarging the image, you should prefer to use INTER_LINEAR or INTER_CUBIC interpolation. If you are shrinking the image, you should prefer to use INTER_AREA interpolation.
@@ -29,7 +32,8 @@ https://stackoverflow.com/questions/23853632/which-kind-of-interpolation-best-fo
 
 
 def load_fixed_mask(resolution: int, mask_image_path="latentsync/utils/mask.png") -> torch.Tensor:
-    mask_image = cv2.imread(mask_image_path)
+    # mask_image = cv2.imread(mask_image_path)
+    mask_image = np.array(Image.open(mask_image_path))
     mask_image = cv2.cvtColor(mask_image, cv2.COLOR_BGR2RGB)
     mask_image = cv2.resize(mask_image, (resolution, resolution), interpolation=cv2.INTER_LANCZOS4) / 255.0
     mask_image = rearrange(torch.from_numpy(mask_image), "h w c -> c h w")

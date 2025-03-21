@@ -13,9 +13,10 @@
 # limitations under the License.
 
 import os
-import subprocess
-from tqdm import tqdm
 import random
+import subprocess
+
+from tqdm import tqdm
 
 
 def inference_video_from_fileslist(
@@ -53,7 +54,7 @@ def inference_video_from_fileslist(
         video_name = os.path.basename(video_path)[:-4]
         audio_name = os.path.basename(audio_path)[:-4]
         video_out_path = os.path.join(output_dir, f"{video_name}__{audio_name}.mp4")
-        inference_command = f"python -m scripts.inference --guidance_scale 1.5 --unet_config_path {unet_config_path} --video_path {video_path} --audio_path {audio_path} --video_out_path {video_out_path} --inference_ckpt_path {ckpt_path}"
+        inference_command = f"uv run python-m scripts.inference --guidance_scale 1.5 --unet_config_path {unet_config_path} --video_path {video_path} --audio_path {audio_path} --video_out_path {video_out_path} --inference_ckpt_path {ckpt_path}"
         subprocess.run(inference_command, shell=True)
 
 
@@ -67,4 +68,6 @@ if __name__ == "__main__":
 
     seed = 42
 
-    inference_video_from_fileslist(video_fileslist, audio_fileslist, output_dir, unet_config_path, ckpt_path, seed)
+    inference_video_from_fileslist(
+        video_fileslist, audio_fileslist, output_dir, unet_config_path, ckpt_path, seed
+    )

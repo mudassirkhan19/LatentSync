@@ -3,15 +3,14 @@
 import inspect
 import os
 import shutil
-from typing import Callable, List, Optional, Union
 import subprocess
+from typing import Callable, List, Optional, Union
 
 import numpy as np
+import soundfile as sf
 import torch
 import torchvision
-
-from packaging import version
-
+import tqdm
 from diffusers.configuration_utils import FrozenDict
 from diffusers.models import AutoencoderKL
 from diffusers.pipelines import DiffusionPipeline
@@ -24,16 +23,13 @@ from diffusers.schedulers import (
     PNDMScheduler,
 )
 from diffusers.utils import deprecate, logging
-
 from einops import rearrange
-import cv2
+from packaging import version
 
-from ..models.unet import UNet3DConditionModel
-from ..utils.util import read_video, read_audio, write_video, check_ffmpeg_installed
-from ..utils.image_processor import ImageProcessor, load_fixed_mask
-from ..whisper.audio2feature import Audio2Feature
-import tqdm
-import soundfile as sf
+from latentsync.models.unet import UNet3DConditionModel
+from latentsync.utils.image_processor import ImageProcessor, load_fixed_mask
+from latentsync.utils.util import check_ffmpeg_installed, read_audio, read_video, write_video
+from latentsync.whisper.audio2feature import Audio2Feature
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
 
@@ -170,8 +166,7 @@ class LipsyncPipeline(DiffusionPipeline):
             callback_steps is not None and (not isinstance(callback_steps, int) or callback_steps <= 0)
         ):
             raise ValueError(
-                f"`callback_steps` has to be a positive integer but is {callback_steps} of type"
-                f" {type(callback_steps)}."
+                f"`callback_steps` has to be a positive integer but is {callback_steps} of type {type(callback_steps)}."
             )
 
     def prepare_latents(self, batch_size, num_frames, num_channels_latents, height, width, dtype, device, generator):
@@ -372,11 +367,14 @@ class LipsyncPipeline(DiffusionPipeline):
                 audio_embeds = None
             inference_faces = faces[i * num_frames : (i + 1) * num_frames]
             latents = all_latents[:, :, i * num_frames : (i + 1) * num_frames]
+            # torch.Size([1, 4, 16, 32, 32])
+            breakpoint()
             ref_pixel_values, masked_pixel_values, masks = self.image_processor.prepare_masks_and_masked_images(
                 inference_faces, affine_transform=False
             )
 
             # 7. Prepare mask latent variables
+            # torch.Size([2, 1, 16, 32, 32]), torch.Size([2, 4, 16, 32, 32])
             mask_latents, masked_image_latents = self.prepare_mask_latents(
                 masks,
                 masked_pixel_values,
@@ -389,6 +387,8 @@ class LipsyncPipeline(DiffusionPipeline):
             )
 
             # 8. Prepare image latents
+            # torch.Size([2, 4, 16, 32, 32])
+            # 2 is due to classifier free guidance
             ref_latents = self.prepare_image_latents(
                 ref_pixel_values,
                 device,
@@ -403,7 +403,7 @@ class LipsyncPipeline(DiffusionPipeline):
                 for j, t in enumerate(timesteps):
                     # expand the latents if we are doing classifier free guidance
                     denoising_unet_input = torch.cat([latents] * 2) if do_classifier_free_guidance else latents
-                    
+
                     denoising_unet_input = self.scheduler.scale_model_input(denoising_unet_input, t)
 
                     # concat latents, mask, masked_image_latents in the channel dimension
@@ -412,9 +412,7 @@ class LipsyncPipeline(DiffusionPipeline):
                     )
 
                     # predict the noise residual
-                    noise_pred = self.denoising_unet(
-                        denoising_unet_input, t, encoder_hidden_states=audio_embeds
-                    ).sample
+                    noise_pred = self.denoising_unet(denoising_unet_input, t, encoder_hidden_states=audio_embeds).sample
 
                     # perform guidance
                     if do_classifier_free_guidance:
@@ -438,9 +436,7 @@ class LipsyncPipeline(DiffusionPipeline):
             synced_video_frames.append(decoded_latents)
             # masked_video_frames.append(masked_pixel_values)
 
-        synced_video_frames = self.restore_video(
-            torch.cat(synced_video_frames), video_frames, boxes, affine_matrices
-        )
+        synced_video_frames = self.restore_video(torch.cat(synced_video_frames), video_frames, boxes, affine_matrices)
         # masked_video_frames = self.restore_video(
         #     torch.cat(masked_video_frames), video_frames, boxes, affine_matrices
         # )
@@ -463,3 +459,52 @@ class LipsyncPipeline(DiffusionPipeline):
 
         command = f"ffmpeg -y -loglevel error -nostdin -i {os.path.join(temp_dir, 'video.mp4')} -i {os.path.join(temp_dir, 'audio.wav')} -c:v libx264 -c:a aac -q:v 0 -q:a 0 {video_out_path}"
         subprocess.run(command, shell=True)
+
+
+if __name__ == "__main__":
+    from omegaconf import OmegaConf
+
+    config = OmegaConf.load("configs/unet/stage2.yaml")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    vae = AutoencoderKL.from_pretrained("stabilityai/sd-vae-ft-mse", torch_dtype=torch.float16)
+    vae.config.scaling_factor = 0.18215
+    vae.config.shift_factor = 0
+
+    vae_scale_factor = 2 ** (len(vae.config.block_out_channels) - 1)
+    vae.requires_grad_(False)
+    vae.to(device)
+
+    audio_encoder = Audio2Feature()
+    noise_scheduler = DDIMScheduler.from_pretrained("configs")
+
+    denoising_unet, _ = UNet3DConditionModel.from_pretrained(
+        OmegaConf.to_container(config.model),
+        config.ckpt.resume_ckpt_path,
+        device=device,
+    )
+
+    pipeline = LipsyncPipeline(
+        vae=vae,
+        audio_encoder=audio_encoder,
+        denoising_unet=denoising_unet,
+        scheduler=noise_scheduler,
+    ).to(device)
+    # pipeline.set_progress_bar_config(disable=True)
+    validation_video_out_path = "temp/demo1_lipsync.mp4"
+    validation_video_mask_path = "assets/demo1_lipsync_mask.mp4"
+    with torch.autocast(device_type="cuda", dtype=torch.float16):
+        pipeline(
+            config.data.val_video_path,
+            config.data.val_audio_path,
+            validation_video_out_path,
+            validation_video_mask_path,
+            num_frames=config.data.num_frames,
+            num_inference_steps=config.run.inference_steps,
+            guidance_scale=config.run.guidance_scale,
+            weight_dtype=torch.float16,
+            width=config.data.resolution,
+            height=config.data.resolution,
+            mask=config.data.mask,
+            mask_image_path=config.data.mask_image_path,
+        )

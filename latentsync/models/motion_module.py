@@ -4,20 +4,17 @@
 # When we started the project, we used the codebase of AnimateDiff and tried motion module
 # But the results are poor, and we decied to leave the code here for possible future usage
 
+import math
 from dataclasses import dataclass
 
 import torch
 import torch.nn.functional as F
+from diffusers.models.attention import FeedForward
+from diffusers.utils import BaseOutput
+from einops import rearrange, repeat
 from torch import nn
 
-from diffusers.configuration_utils import ConfigMixin, register_to_config
-from diffusers.models import ModelMixin
-from diffusers.utils import BaseOutput
-from diffusers.models.attention import FeedForward
 from .attention import Attention
-
-from einops import rearrange, repeat
-import math
 from .utils import zero_module
 
 
@@ -136,10 +133,9 @@ class TemporalTransformer3DModel(nn.Module):
         hidden_states = self.proj_in(hidden_states)
 
         # Transformer Blocks
+
         for block in self.transformer_blocks:
-            hidden_states = block(
-                hidden_states, encoder_hidden_states=encoder_hidden_states, video_length=video_length
-            )
+            hidden_states = block(hidden_states, encoder_hidden_states=encoder_hidden_states, video_length=video_length)
 
         # output
         hidden_states = self.proj_out(hidden_states)
@@ -266,7 +262,6 @@ class VersatileAttention(Attention):
 
             if self.pos_encoder is not None:
                 hidden_states = self.pos_encoder(hidden_states)
-
             ##### This section will not be executed #####
             encoder_hidden_states = (
                 repeat(encoder_hidden_states, "b n c -> (b s) n c", s=s)
@@ -282,7 +277,6 @@ class VersatileAttention(Attention):
 
         query = self.to_q(hidden_states)
         query = self.split_heads(query)
-
         encoder_hidden_states = encoder_hidden_states if encoder_hidden_states is not None else hidden_states
         key = self.to_k(encoder_hidden_states)
         value = self.to_v(encoder_hidden_states)

@@ -5,14 +5,12 @@ from typing import Optional
 
 import torch
 import torch.nn.functional as F
-from torch import nn
-
 from diffusers.configuration_utils import ConfigMixin, register_to_config
 from diffusers.models import ModelMixin
+from diffusers.models.attention import AdaLayerNorm, FeedForward
 from diffusers.utils import BaseOutput
-from diffusers.models.attention import FeedForward, AdaLayerNorm
-
-from einops import rearrange, repeat
+from einops import rearrange
+from torch import nn
 
 
 @dataclass
@@ -171,9 +169,7 @@ class BasicTransformerBlock(nn.Module):
         self.ff = FeedForward(dim, dropout=dropout, activation_fn=activation_fn)
         self.norm3 = nn.LayerNorm(dim)
 
-    def forward(
-        self, hidden_states, encoder_hidden_states=None, timestep=None, attention_mask=None, video_length=None
-    ):
+    def forward(self, hidden_states, encoder_hidden_states=None, timestep=None, attention_mask=None, video_length=None):
         norm_hidden_states = (
             self.norm1(hidden_states, timestep) if self.use_ada_layer_norm else self.norm1(hidden_states)
         )
@@ -253,7 +249,6 @@ class Attention(nn.Module):
 
         query = self.to_q(hidden_states)
         query = self.split_heads(query)
-
         encoder_hidden_states = encoder_hidden_states if encoder_hidden_states is not None else hidden_states
         key = self.to_k(encoder_hidden_states)
         value = self.to_v(encoder_hidden_states)
